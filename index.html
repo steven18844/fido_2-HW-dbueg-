@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebAuthn 註冊和登入</title>
+</head>
+<body>
+    <h1>WebAuthn</h1>
+    <input type="text" id="username" placeholder="Enter Username">
+    <button onclick="register()">Register</button>
+    <button onclick="login()">Login</button>
+
+    <script>
+        // 將 URL 安全的 Base64 轉換為標準 Base64
+        const base64UrlToBase64 = (base64url) => {
+            return base64url.replace(/-/g, '+').replace(/_/g, '/');
+        };
+        // 呼叫後端來生成 WebAuthn 的創建選項
+        async function register() {
+            try {
+                const username = document.getElementById('username').value;  // 從 input 中獲取 username
+                const response = await fetch('/register/begin', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ username })  // 將 username 傳遞到後端
+                });
+                const publicKeyCredentialCreationOptions = await response.json();
+
+                // 將 base64 字串轉換為 Uint8Array 格式
+                publicKeyCredentialCreationOptions.challenge = Uint8Array.from(atob(publicKeyCredentialCreationOptions.challenge), c => c.charCodeAt(0));
+                publicKeyCredentialCreationOptions.user.id = Uint8Array.from(atob(publicKeyCredentialCreationOptions.user.id), c => c.charCodeAt(0));
+                // 呼叫 WebAuthn API，創建憑證
+                const credential = await navigator.credentials.create({
+                    publicKey: publicKeyCredentialCreationOptions
+                });
+
+                console.log("Credential created: ", credential);
+                const credentialIdBase64 = base64UrlToBase64(credential.id);
+                // 將憑證數據傳送到後端存儲
+                await fetch('/register/complete', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        credential: {
+                            id: credentialIdBase64,
+                            rawId: Array.from(new Uint8Array(credential.rawId)),
+                            type: credential.type,
+                            response: {
+                                attestationObject: Array.from(new Uint8Array(credential.response.attestationObject)),
+                                clientDataJSON: Array.from(new Uint8Array(credential.response.clientDataJSON)),
+                            }
+                        },
+                        username: username // 將 username 傳到後端
+                    })
+                });
+
+            } 
+            catch (error) {
+                console.error("Error during registration: ", error);
+            }
+        }
+
+        // 呼叫後端來生成 WebAuthn 的驗證選項
+        async function login() {
+            try {
+                const username = document.getElementById('username').value;
+                console.log("發送的 username: ", username);  // 加上這一行來檢查發送的 username
+                const response = await fetch('/login/begin', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ username })
+                });
+                const publicKeyCredentialRequestOptions = await response.json();
+                
+                
+                //在console顯示challenge和credential ID
+                console.log("Challenge: ", publicKeyCredentialRequestOptions.challenge);
+                publicKeyCredentialRequestOptions.allowCredentials.forEach(cred => {
+                    console.log("Credential ID: ", cred.id);
+                });
+                
+
+                // 將 base64 字串轉換為 Uint8Array 格式
+                publicKeyCredentialRequestOptions.challenge = Uint8Array.from(atob(publicKeyCredentialRequestOptions.challenge), c => c.charCodeAt(0));
+                publicKeyCredentialRequestOptions.allowCredentials = publicKeyCredentialRequestOptions.allowCredentials.map(cred => {
+                    return {
+                        ...cred,
+                        id: Uint8Array.from(atob(cred.id), c => c.charCodeAt(0))
+                        //id: new Uint8Array(cred.id)
+                    };
+                });
+                
+                // 呼叫 WebAuthn API 進行驗證
+                const assertion = await navigator.credentials.get({
+                    publicKey: publicKeyCredentialRequestOptions
+                });
+                
+                console.log("Assertion created:", assertion);//用來在瀏覽器的開發者控制台中輸出一個訊息
+                console.log("response:",assertion.response);
+                const credentialIdBase64 = base64UrlToBase64(assertion.id);
+
+                // 將驗證資料傳送到後端進行驗證
+                await fetch('/login/complete', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        id: credentialIdBase64,
+                        rawId: Array.from(new Uint8Array(assertion.rawId)),
+                        type: assertion.type,
+                        response: {
+                            authenticatorData: Array.from(new Uint8Array(assertion.response.authenticatorData)),
+                            clientDataJSON: Array.from(new Uint8Array(assertion.response.clientDataJSON)),
+                            signature: Array.from(new Uint8Array(assertion.response.signature)),
+                            userHandle: assertion.response.userHandle ? Array.from(new Uint8Array(assertion.response.userHandle)) : null
+                        },
+                        currentChallenge:publicKeyCredentialRequestOptions.challenge
+                    })
+                });
+            } catch (error) {
+                console.error("Error during login: ", error);
+            }
+        }
+    </script>
+</body>
+</html>
